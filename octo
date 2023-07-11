@@ -1,0 +1,87 @@
+#!/bin/bash
+# Author: Laurens Laman
+# Date: 2015-12-27
+# URL: https://gist.github.com/LauLaman/5d798fc1a15324d9973b
+#
+# DESCRIPTION
+# Use this scripts to make regular backups of the sites files and database using Git
+#
+# INSTRUCTIONS
+# Make shure git is initialized in all your sites dir
+# Configure $mysqlUser and $mysqlPassword
+# Configure $databasePath to the git folder you want to use as git backup (Make shure git is initialized)
+# Configure $filePath to the git root of the sites. (Note: [site] will be automatacally replaced by the domainname)
+# Database needs to be the same as the domainname the dots [.] are replaced by an underscore [_]
+# Enter the domainnames (database style) as an array in $backupSites (Script automatacally converts example_com to example.com)
+# Test script
+# Add script to cron:  (run every day on 3:00 am)
+# 0 3 * * * /var/scripts/backupSites.sh > /var/logs/backupSites.log
+
+
+mysqlUser="uername"; #-- MySQL username (with read access to all databases)
+mysqlPassword="password"; #-- MySQL password (with read access to all databases)
+databasePath="/var/mysql_backups";  #-- place we want to store the database backup
+filePath="/var/www/[site]/htdocs"; #-- Location of the website files we want to backup
+
+#-- Sites we want to backup
+backupSites=("example_com" "example_nl");
+
+echo "$(date +"%Y-%m-%d %T") STARTING BACKUP";
+for site in "${backupSites[@]}"
+do
+  echo "    $site";
+
+  #-- Backup Database
+  databaseResult="$( { mysqldump -h localhost -u$mysqlUser -p$mysqlPassword "$site" --skip-dump-date | gzip > "$databasePath/$site.sql.gz" ;} 2>&1 )";
+  if [[ $databaseResult =~ "error" ]]
+  then
+    rm "$databasePath/$site.sql.gz" #-- Remove empty file
+    echo "      -> [failed] database backup";
+  else
+    echo "      -> [done] database backup"
+  fi
+
+  #-- Backup site
+  site="${site//_/.}";
+  path="${filePath/\[site\]/$site}";
+  if [[ -d $path ]]
+  then
+    cd $path
+    if [[ -d ".git" ]]
+    then
+      #-- This site has a git repo: commit
+      gitStatus="$(git status -s)";
+      if [[ -z "$gitStatus" ]]
+      then
+        echo "      -> [done] Git repo already up-to-date";
+      else
+        {
+          git pull >/dev/null 2>/dev/null  &&
+          git add-commit -m "$(date +"%Y-%m-%d %T") Auto backup" >/dev/null  &&
+          git push >/dev/null 2>/dev/null &&
+          echo "      -> [done] Git repo succesfully updated: '$(git rev-parse HEAD)'";
+        } || {
+          echo "      -> [failed] Git repo not updated";
+        }
+     fi
+    else
+      echo "      -> [warning] Git repo not initialized";
+    fi
+  else
+    echo "      -> [error] site path '$path' not found"
+  fi
+done
+
+echo "    [DATABASES -> GIT]";
+#-- Send database backups to repo
+cd $databasePath
+{
+  git pull >/dev/null 2>/dev/null  &&
+  git add-commit -m "$(date +"%Y-%m-%d %T") Auto backup" >/dev/null  &&
+  git push >/dev/null 2>/dev/null &&
+  echo "    -> [done] Git repo succesfully updated: '$(git rev-parse HEAD)'";
+} || {
+  echo "    ->[failed] Git repo not updated";
+}
+
+echo "[FINISH] $(date +"%T")";
